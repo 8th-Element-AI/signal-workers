@@ -83,9 +83,9 @@ class SafetyWorker(SpecWorker):
     def __init__(self, cfg):
         super().__init__(cfg)
 
-        self.cache_max = cfg.pii_cache_max
-        self.batch_concurrency = cfg.pii_batch
-        self.ner_model = cfg.pii_ner_model
+        self.cache_max = cfg.signal_pii_cache_max
+        self.batch_concurrency = cfg.signal_pii_batch
+        self.ner_model = cfg.signal_pii_ner_model
 
         self._pii_engine = None
         self._cache: "OrderedDict[str, object]" = OrderedDict()  # hash -> AnalysisResult
