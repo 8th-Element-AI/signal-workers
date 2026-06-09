@@ -19,7 +19,7 @@ RAW = sys.argv[1] if len(sys.argv) > 1 else "signal_raw_spans.csv"
 DER = sys.argv[2] if len(sys.argv) > 2 else "signal_derived_metrics.csv"
 
 # 1) run the worker
-w = PerformanceWorker(Config.from_env())
+w = PerformanceWorker(Config())
 produced = w.run_csv(RAW)
 
 prod = defaultdict(dict)  # (span_id, scope) -> {metric: value}

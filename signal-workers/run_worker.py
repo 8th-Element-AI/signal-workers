@@ -135,7 +135,7 @@ def main() -> int:
         logger.error("--csv requires a specific worker, not 'all'")
         return 2
 
-    cfg = Config.from_env()
+    cfg = Config()
 
     if args.worker == "all":
         return _run_all(cfg, args.once)

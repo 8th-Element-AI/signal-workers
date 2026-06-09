@@ -5,27 +5,65 @@ Set these in the environment (or a .env) when running against your stack:
   PG_DSN                                            -> Postgres (config/pricing; not needed for Performance)
   WORKER_BATCH, WORKER_POLL_SEC, WORKER_STATE_DIR   -> run loop tuning
 """
-import os
-from dataclasses import dataclass
+from pathlib import Path
+
+from pydantic import Field
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
 
 
-@dataclass
-class Config:
-    # ClickHouse — where spans live and metrics are written
-    ch_host: str = os.getenv("CH_HOST", "localhost")
-    ch_port: int = int(os.getenv("CH_PORT", "8123"))   # HTTP interface
-    ch_db: str = os.getenv("CH_DB", "signal")
-    ch_user: str = os.getenv("CH_USER", "default")
-    ch_password: str = os.getenv("CH_PASSWORD", "")
+class Config(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=ROOT_DIR / ".env",
+        env_file_encoding="utf-8",
+        case_sensitive=False,
+    )
 
-    # Postgres — config/registry/pricing. Unused by Performance; here for later lenses.
-    pg_dsn: str = os.getenv("PG_DSN", "postgresql://postgres@localhost:5432/signal")
+    ch_host: str = Field(default="localhost", alias="CH_HOST")
+    ch_port: int = Field(default=8123, alias="CH_PORT")
+    ch_db: str = Field(default="signal", alias="CH_DB")
+    ch_user: str = Field(
+      default="default",
+      alias="CH_USER"
+    )
+    
+    ch_password: str = Field(
+      default="",
+      alias="CH_PASSWORD"
+    )
 
-    # Run loop
-    batch_size: int = int(os.getenv("WORKER_BATCH", "5000"))
-    poll_sec: float = float(os.getenv("WORKER_POLL_SEC", "2.0"))
-    state_dir: str = os.getenv("WORKER_STATE_DIR", "/var/lib/signal-workers")
+    pg_dsn: str = Field(
+      default="",
+      alias="PG_DSN"
+    )
 
-    @classmethod
-    def from_env(cls) -> "Config":
-        return cls()
+    batch_size: int = Field(
+      default=5000,
+      alias="WORKER_BATCH"
+    )
+
+    poll_sec: float = Field(
+      default=2.0,
+      alias="WORKER_POLL_SEC"
+    )
+
+    state_dir: str = Field(
+      default="./worker_state", 
+      alias="WORKER_STATE_DIR"
+    )
+
+    signal_pii_ner_model: str = Field(
+      default="en_core_web_sm",
+      alias="SIGNAL_PII_NER_MODEL"
+    )
+
+    signal_pii_batch: int = Field(
+      default=4,
+      alias="SIGNAL_PII_BATCH"
+    )
+
+    signal_pii_cache_max: int = Field(
+      default=20000,
+      alias="SIGNAL_PII_CACHE_MAX"
+    )
