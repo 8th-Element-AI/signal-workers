@@ -37,6 +37,10 @@ cost_derived*.csv
 *.local
 secrets/
 
+models/
+content_safety/scripts/
+content_safety/tests/
+
 # ---- Logs ----
 *.log
 logs/

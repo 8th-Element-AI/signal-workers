@@ -67,3 +67,14 @@ class Config(BaseSettings):
       default=20000,
       alias="SIGNAL_PII_CACHE_MAX"
     )
+
+    signal_content_safety_config: str = Field(
+      default="",
+      alias="SIGNAL_CONTENT_SAFETY_CONFIG"
+    )
+
+    signal_content_safety_cache_max: int = Field(
+      default=20000,
+      alias="SIGNAL_CONTENT_SAFETY_CACHE_MAX"
+    )
+
