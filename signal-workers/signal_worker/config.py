@@ -53,6 +53,11 @@ class Config(BaseSettings):
       alias="WORKER_STATE_DIR"
     )
 
+    signal_toggle_ttl: float = Field(
+      default=300,
+      alias="SIGNAL_TOGGLE_TTL"
+    )
+
     signal_pii_ner_model: str = Field(
       default="gravitee-io/bert-small-pii-detection",
       alias="SIGNAL_PII_NER_MODEL"
@@ -68,7 +73,13 @@ class Config(BaseSettings):
       alias="SIGNAL_PII_CACHE_MAX"
     )
 
-    signal_toggle_ttl: float = Field(
-      default=300,
-      alias="SIGNAL_TOGGLE_TTL"
+    signal_toxicity_config: str = Field(
+      default="",
+      alias="SIGNAL_TOXICITY_CONFIG"
     )
+
+    signal_toxicity_cache_max: int = Field(
+      default=20000,
+      alias="SIGNAL_TOXICITY_CACHE_MAX"
+    )
+

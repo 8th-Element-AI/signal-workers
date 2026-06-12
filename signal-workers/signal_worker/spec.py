@@ -13,10 +13,11 @@ import json
 import logging
 from dataclasses import dataclass, field
 from collections import Counter
-from typing import Callable, Optional
+from typing import Callable, Optional, Set, List, Any, Iterable
 
 from .base import BaseWorker, path_cols
 from .toggle_cache import ToggleCache
+from .utils import LRUCache
 
 log = logging.getLogger("signal.worker")
 
@@ -34,6 +35,21 @@ class MetricSpec:
     per_span: bool = True                   # False => computed at read time, not by compute()
     meta_fn: Optional[Callable] = None      # (span, ctx) -> dict | None
 
+
+@dataclass
+class PrefillStep:
+    """One expensive batched analysis step (Presidio, content-safety, etc.).
+ 
+    Hosted in spec.py because the pipeline is generic (sub-filter -> extract
+    -> dedup -> analyze -> cache). Each lens defines its own steps in its
+    __init__ and the shared engine iterates them.
+    """
+    name: str                               # log label: "pii", "content_safety"
+    metrics: Set[str]                       # metric names that need this step
+    cache: LRUCache                         # result cache populated here
+    extract: Callable[[dict], Iterable[str]]  # span -> iterable of texts to analyze
+    analyze: Callable[[List[str]], List[Optional[Any]]]
+                                            # texts -> results (None = skip cache)
 
 class SpecWorker(BaseWorker):
     specs: list = []
@@ -117,6 +133,86 @@ class SpecWorker(BaseWorker):
         """
         return [s for s in spans if self._has_any_active_metrics(s)]
     
+    def _spans_needing(self, spans: list, metrics) -> list:
+        """Filter `spans` down to those with an active threshold on at least
+        one metric in `metrics` (a set/iterable of metric names).
+ 
+        Used by lenses with multiple expensive batched analyses (Safety has
+        PII + content-safety, Quality will have judge-call groups). Each
+        prefill calls this with its own metric group so it skips spans that
+        passed the main gate on a different metric group's threshold.
+        """
+        metric_set = set(metrics)
+        active = self.toggle_cache.active
+        result = []
+        for span in spans:
+            matched = False
+            for scope in self.scopes_for(span):
+                if matched:
+                    break
+                p = path_cols(span, scope)
+                for metric in metric_set:
+                    if self._gate_key(scope, p, metric) in active:
+                        result.append(span)
+                        matched = True
+                        break
+        return result
+    
+    # ------------------------------------------------------------------
+    # Generic per-step prefill helper — used by Safety today, Quality later.
+    #
+    # A "step" is a piece of expensive per-text analysis (Presidio scan,
+    # content-safety classification, future LLM-judge call). Steps share
+    # this pipeline:
+    #     1. Sub-filter `kept` to spans whose threshold metrics overlap
+    #        with step.metrics (so a span kept only for a different group's
+    #        threshold doesn't pay this step's CPU).
+    #     2. Extract texts from each needed span via step.extract.
+    #     3. Dedup against step.cache and within the batch.
+    #     4. Call step.analyze on the unique remaining texts.
+    #     5. Cache results by content hash.
+    #
+    # Returns the number of texts actually sent to the analyzer (for logging).
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _hash(text: str) -> str:
+        import hashlib
+        return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()[:16]
+ 
+    def _prefill_cache(self, kept: list, step: "PrefillStep") -> int:
+        needed = self._spans_needing(kept, step.metrics)
+        if not needed:
+            log.info("[%s] %s: no spans need analysis", self.lens, step.name)
+            return 0
+ 
+        to_analyze: dict[str, str] = {}
+        for span in needed:
+            for text in step.extract(span):
+                if not text:
+                    continue
+                h = self._hash(text)
+                if step.cache.get(h) is None and h not in to_analyze:
+                    to_analyze[h] = text
+ 
+        if not to_analyze:
+            log.info(
+                "[%s] %s: %d spans need analysis, all texts cached",
+                self.lens, step.name, len(needed),
+            )
+            return 0
+ 
+        hashes = list(to_analyze.keys())
+        texts = [to_analyze[h] for h in hashes]
+        log.info(
+            "[%s] %s: analyzing %d unique texts from %d spans",
+            self.lens, step.name, len(texts), len(needed),
+        )
+        results = step.analyze(texts)
+        for h, r in zip(hashes, results):
+            if r is not None:
+                step.cache.put(h, r)
+        return len(texts)
+    
     # ------------------------------------------------------------------
     # Row builder — invokes spec.meta_fn for per-row metric_meta
     # ------------------------------------------------------------------
@@ -146,7 +242,7 @@ class SpecWorker(BaseWorker):
             if meta:
                 row["metric_meta"] = json.dumps(meta, separators=(",", ":"))
         return row
-
+ 
     # ------------------------------------------------------------------
     # compute() — per-span engine. Stage-2 spec-level gate lives here.
     # ------------------------------------------------------------------
@@ -172,7 +268,7 @@ class SpecWorker(BaseWorker):
                     continue
                 rows.append(self._row(p, span, spec, val, ctx))
         return rows
-
+ 
     # ------------------------------------------------------------------
     # process_batch() — applies stage-1 gate, then runs the shared engine
     # ------------------------------------------------------------------
@@ -180,32 +276,36 @@ class SpecWorker(BaseWorker):
         original = len(spans)
         kept = self.filter_spans_by_gate(spans)
         return self._process_kept(original, kept, original - len(kept))
-
+ 
     def _process_kept(self, original: int, kept: list, skipped_at_gate: int) -> list:
         """Run compute() over already-gated spans and emit the per-batch summary.
-
+ 
         Single source of truth for the compute loop + logging. Lenses that
         need to do extra work between Stage 1 (gate filter) and the compute
         loop — e.g. Safety pre-filling its PII cache — call this directly
         instead of process_batch() to avoid double-filtering and double-logging.
         """
         self._batch_skipped_at_spec = Counter()
-
+ 
         rows = []
         for span in kept:
             rows.extend(self.compute(span))
         
         print(
-            f"[{self.lens}] batch={original} processed={len(kept)} "
-            f"skipped_at_gate={skipped_at_gate} emitted={len(rows)}"
+            "[%s] batch=%d processed=%d skipped_at_gate=%d emitted=%d"
+            % (self.lens, original, len(kept), skipped_at_gate, len(rows))
         )
-        
+
+        log.info(
+            "[%s] batch=%d processed=%d skipped_at_gate=%d emitted=%d",
+            self.lens, original, len(kept), skipped_at_gate, len(rows),
+        )
         if self._batch_skipped_at_spec:
             top = self._batch_skipped_at_spec.most_common(10)
             log.info(
                 "[%s] skipped_at_spec (top %d): %s",
                 self.lens, len(top), dict(top),
             )
-
+ 
         return rows
 
