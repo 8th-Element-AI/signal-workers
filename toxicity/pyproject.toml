@@ -3,13 +3,14 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "safety-observability-runtime"
+name = "toxicity-observability-runtime"
 version = "0.1.0"
-description = "Local safety observability classifier runtime with FastText routing and BERT confirmers."
+description = "Local toxicity observability classifier runtime with FastText routing and BERT confirmers."
 requires-python = ">=3.10"
 dependencies = [
-  "fasttext-wheel>=0.9.2",
+  "fasttext-numpy2-wheel>=0.9.2",
   "huggingface_hub>=0.30.0",
+  "onnxruntime>=1.17",
   "pydantic>=2",
   "pyyaml>=6",
   "safetensors>=0.5.0",
@@ -18,7 +19,7 @@ dependencies = [
 ]
 
 [project.scripts]
-safety-observe = "safety_observability.cli:main"
+toxicity-observe = "toxicity_observability.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["safety_observability*"]
+include = ["toxicity_observability*"]

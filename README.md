@@ -260,4 +260,12 @@ GROUP BY solution_id;
 2. Register it in `run_worker.py` and `show_specs.py` (`LENSES` dict).
 3. Validate offline with `--csv`, then run `--once` live.
 
+
+Local Windows dev: `fasttext-numpy2-wheel` has no Windows wheel and requires
+MSVC to build. Instead, install `fasttext-wheel` and patch line 228 of
+.venv/Lib/site-packages/fasttext/FastText.py:
+    np.array(probs, copy=False)  →  np.asarray(probs)
+Production (Linux) uses `fasttext-numpy2-wheel` from `pyproject.toml` and
+builds it cleanly via gcc.
+
 See ARCHITECTURE.md → "Adding a lens" for the full walkthrough.

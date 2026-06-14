@@ -114,6 +114,14 @@ ENGINE = MergeTree
 PARTITION BY toYYYYMMDD(ts)
 ORDER BY (solution_id, scope, metric, ts, component_id)
 TTL toDateTime(ts) + INTERVAL 90 DAY;
+SETTINGS
+    -- Idempotent worker writes: ClickHouse remembers the last N insert tokens
+    -- and drops re-inserts that carry a matching insert_deduplication_token,
+    -- which also prevents the MV from firing twice. Workers pass a deterministic
+    -- token per batch (see signal_worker/base.py:run_poll). Window of 1000 is
+    -- vastly more than the worst-case "crash between write and save_checkpoint"
+    -- gap; we'd only need it to cover one stale batch.
+    non_replicated_deduplication_window = 1000;
 
 -- ----------------------------------------------------------------------------
 -- 3. signal_aggregated_metrics  (AggregatingMergeTree — aggregate states)

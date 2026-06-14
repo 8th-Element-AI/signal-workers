@@ -10,8 +10,8 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-def load_config() -> dict[str, Any]:
-    cfg_path = repo_root() / "configs" / "runtime.yaml"
+def load_config(config_path: str | None = None) -> dict[str, Any]:
+    cfg_path = Path(config_path) if config_path else repo_root() / "configs" / "runtime.yaml"
     return yaml.safe_load(cfg_path.read_text(encoding="utf-8"))
 
 

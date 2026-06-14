@@ -29,3 +29,10 @@ class FastTextRouter:
                 if key in scores:
                     scores[key] = float(prob)
         return {"scores": scores, "latency_ms": round((time.time() - started) * 1000, 3)}
+
+    def predict_batch(self, texts: list[str]) -> list[dict[str, Any]]:
+        """Per-text loop. FastText doesn't natively batch; this is here for
+        API symmetry with the HF classifiers and so callers can pass a list
+        without writing the loop themselves.
+        """
+        return [self.predict(t) for t in texts]

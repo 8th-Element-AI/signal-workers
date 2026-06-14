@@ -13,25 +13,86 @@ from .normalize import normalize
 
 
 class ToxicityClassifier:
-    def __init__(self) -> None:
-        self.config = load_config()
+    """ENd-to-end toxicity classifier.
+    
+    Models are loaded lazily - accessing `.fasttext`, `.prompt_injection`, or
+    `.moderation` triggers a one-time load of that model only. Callers that
+    only need one model (e.g. the saftey lens worker, which drives routing
+    itself) can read individual properties without paying for the others.
+    """
+
+    
+    def __init__(
+        self,
+        config_path: str | None = None,
+        *,
+        config_dict: dict | None = None,
+    ) -> None:
+        """Initialize with either a config file path or a pre-built dict.
+
+        Precedence:
+          * `config_dict` if provided (used by signal-workers, which builds
+            it from env-driven pydantic Settings),
+          * else `load_config(config_path)` — yaml file, default for CLI use.
+
+        The internal `self.config` shape is identical either way, so
+        downstream code (`classify`, the lazy model properties) is unchanged.
+        """
+        if config_dict is not None:
+            self.config = dict(config_dict)
+        else:
+            self.config = load_config(config_path)
+            
         runtime = self.config.get("runtime", {})
         self.device = resolve_device(runtime.get("device", "cuda"))
         self.max_length = int(runtime.get("max_length", 128))
         self.fp16_on_cuda = bool(runtime.get("fp16_on_cuda", True))
-        models = self.config["models"]
-        self.fasttext = FastTextRouter(resolve_path(models["fasttext_router"]["local_path"]))
-        common = {
+        self._models_cfg = self.config["models"]
+
+        # Lazy slots - None until the corresponding property is read.
+        self._fasttext: FastTextRouter | None = None
+        self._prompt_injection: Any = None
+        self._moderation: ModerationModel | None = None
+
+    @property
+    def _common_kwargs(self) -> dict[str, Any]:
+        return {
             "device": self.device,
             "max_length": self.max_length,
             "fp16_on_cuda": self.fp16_on_cuda,
         }
-        onnx_path = resolve_path(models["prompt_injection_onnx_int8"]["local_path"])
-        if self.device == "cpu" and (onnx_path / "model.onnx").exists():
-            self.prompt_injection = ONNXPromptInjectionModel(str(onnx_path), **common)
-        else:
-            self.prompt_injection = PromptInjectionModel(str(resolve_path(models["prompt_injection"]["local_path"])), **common)
-        self.moderation = ModerationModel(str(resolve_path(models["moderation"]["local_path"])), **common)
+    
+    @property
+    def fasttext(self) -> FastTextRouter:
+        if self._fasttext is None:
+            self._fasttext = FastTextRouter(
+                resolve_path(self._models_cfg["fasttext_router"]["local_path"])
+            )
+        return self._fasttext
+    
+    @property
+    def prompt_injection(self):
+        if self._prompt_injection is None:
+            onnx_path = resolve_path(self._models_cfg["prompt_injection_onnx_int8"]["local_path"])
+            if self.device == "cpu" and (onnx_path / "model.onnx").exists():
+                self._prompt_injection = ONNXPromptInjectionModel(
+                    str(onnx_path), **self._common_kwargs
+                )
+            else:
+                self._prompt_injection = PromptInjectionModel(
+                    str(resolve_path(self._models_cfg["prompt_injection"]["local_path"])),
+                    **self._common_kwargs,
+                )
+        return self._prompt_injection
+
+    @property
+    def moderation(self) -> ModerationModel:
+        if self._moderation is None:
+            self._moderation = ModerationModel(
+                str(resolve_path(self._models_cfg["moderation"]["local_path"])),
+                **self._common_kwargs,
+            )
+        return self._moderation
 
     def classify(self, text: str, *, full_scan: bool | None = None, include_raw: bool = False) -> dict[str, Any]:
         started = time.time()

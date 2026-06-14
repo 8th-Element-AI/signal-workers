@@ -7,9 +7,6 @@ A lens worker only has to declare which metrics it owns and implement
   * pulling unprocessed spans in batches (poll mode) by a `recorded_at` checkpoint,
   * writing computed metric rows into `signal_derived_metrics`,
   * persisting the checkpoint so restarts resume cleanly,
-  * a `run_csv()` path so the exact same compute logic can be validated
-    offline against an exported spans CSV (no ClickHouse needed),
-  * a `on_message()` hook shaped for a future NATS consumer,
   * a `process_batch(spans)` hook for lenses with expensive per-text inference
     (Safety/Quality) — they override it to batch one model call across many
     spans; cheap lenses (Performance, Cost) inherit the default loop,
@@ -130,23 +127,19 @@ class BaseWorker:
         return self._ch
 
     # ---- checkpoint (file-based; simple and restart-safe) ----
-    def _state_path(self):
-        os.makedirs(self.cfg.state_dir, exist_ok=True)
-        return os.path.join(self.cfg.state_dir, f"{self.lens}.checkpoint")
+    def _checkpoint_store(self):
+        # Lazy — first call opens the PG connection. Cached on `self` for
+        # the worker's lifetime.
+        if not hasattr(self, "_ckpt_store"):
+            from .checkpoint import PostgresCheckpointStore
+            self._ckpt_store = PostgresCheckpointStore(self.cfg.pg_dsn)
+        return self._ckpt_store
 
-    def load_checkpoint(self) -> str:
-        try:
-            with open(self._state_path()) as f:
-                return f.read().strip()
-        except FileNotFoundError:
-            return "1970-01-01 00:00:00.000"
+    def load_checkpoint(self):
+        return self._checkpoint_store().load(self.lens)
 
-    def save_checkpoint(self, wm: str):
-        path = self._state_path()
-        tmp = path + ".tmp"
-        with open(tmp, "w") as f:
-            f.write(wm)
-        os.replace(tmp, path)
+    def save_checkpoint(self, cp):
+        self._checkpoint_store().save(self.lens, cp)
 
     # ---- fetch a batch of spans newer than the checkpoint ----
     def fetch_batch(self, since: str, limit: int):
@@ -163,12 +156,20 @@ class BaseWorker:
         return [dict(zip(res.column_names, row)) for row in res.result_rows]
 
     # ---- write computed rows ----
-    def write(self, rows: list):
+    def write(self, rows: list, dedup_token: str | None = None):
         if not rows:
             return
         data = [[r.get(c) for c in DER_COLS] for r in rows]
-        self.ch().insert("signal_derived_metrics", data, column_names=DER_COLS)
-
+        settings = {}
+        if dedup_token:
+            settings["insert_deduplication_token"] = dedup_token
+        self.ch().insert(
+            "signal_derived_metrics",
+            data,
+            column_names=DER_COLS,
+            settings=settings,
+        )
+        
     # ---- shutdown signal (used by main process on Ctrl+C / SIGTERM) ----
     def stop(self):
         log.info("[%s] stop requested", self.lens)
@@ -188,9 +189,13 @@ class BaseWorker:
                     rec = str(s["recorded_at"])
                     if rec > newest:
                         newest = rec
-                self.write(rows)
+                dedup_token = f"{self.lens}:{newest}:{len(spans)}"
+                self.write(rows, dedup_token=dedup_token)
                 self.save_checkpoint(newest)
-                log.info("[%s] %d spans -> %d metrics (wm=%s)", self.lens, len(spans), len(rows), newest)
+                log.info(
+                    "[%s] %d spans -> %d metrics (wm=%s token=%s)",
+                    self.lens, len(spans), len(rows), newest, dedup_token,
+                )
             if once:
                 break
             # Wait on the stop event instead of sleeping — wakes immediately on stop().

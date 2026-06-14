@@ -12,9 +12,9 @@ All lenses in one process (dev convenience — coupled lifecycle):
     python run_worker.py --worker all
     python run_worker.py --worker all --once
 
-Offline (no DB):
+Show registered specs for a lens and exit:
 
-    python run_worker.py --worker performance --csv ./signal_raw_spans.csv --out ./perf.csv
+    python run_worker.py --worker performance --specs
 """
 
 import argparse
@@ -23,9 +23,6 @@ import signal as _signal
 import sys
 import threading
 
-from dotenv import load_dotenv
-
-from signal_worker.base import DER_COLS
 from signal_worker.config import Config
 from signal_worker.lenses.cost import CostWorker
 from signal_worker.lenses.performance import PerformanceWorker
